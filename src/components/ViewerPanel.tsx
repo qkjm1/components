@@ -105,12 +105,24 @@ export default function ViewerPanel({ title }: Props) {
     scene.background = new THREE.Color(0xffffff);
     sceneRef.current = scene;
 
-    // Camera
-    const width = host.clientWidth;
-    const height = host.clientHeight;
-    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
-    camera.position.set(0, 1.6, baseZRef.current);
-    cameraRef.current = camera;
+
+
+
+    // 카메라/타겟 위치 튜닝
+const CAM_Y = 1.0;          // ← 카메라 높이(원래 1.6). 더 올리고 싶으면 값 키워줘.
+const FALLBACK_TARGET_Y = -1.0; // ← 모델이 y=-3에 있으니 중앙쯤을 바라보도록 약간 위로
+
+// Camera
+const width = host.clientWidth;
+const height = host.clientHeight;
+const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+// y만 올리고, 바라보는 위치도 중앙을 향하게
+camera.position.set(0, CAM_Y, baseZRef.current);
+camera.lookAt(0, FALLBACK_TARGET_Y, 0);
+cameraRef.current = camera;
+
+
+
 
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -122,7 +134,7 @@ export default function ViewerPanel({ title }: Props) {
     rendererRef.current = renderer;
 
     // Lights
-    const dir = new THREE.DirectionalLight(0xffff, 2);
+    const dir = new THREE.DirectionalLight(0xd8d8d8, 2);
 
     dir.castShadow = true;
     scene.add(dir);
@@ -153,6 +165,24 @@ export default function ViewerPanel({ title }: Props) {
       MODEL_URL,
       (gltf) => {
         const root = gltf.scene;
+
+        group.add(root);
+
+// ★ 모델의 진짜 중앙을 카메라 타겟으로 맞춤
+try {
+  const box = new THREE.Box3().setFromObject(root);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  // 약간 위쪽을 보고 싶으면 보정값 추가
+  center.y += 0.0; // 필요하면 0.3 ~ 0.6 등으로 조절
+
+  controlsRef.current?.target.copy(center);
+  controlsRef.current?.update();
+  cameraRef.current?.lookAt(center);
+} catch (e) {
+  // 박스 계산 실패 시 폴백 타겟 유지
+}
+
         const names: string[] = [];
         root.traverse((child: any) => {
           if (child.isMesh) {
@@ -168,7 +198,7 @@ export default function ViewerPanel({ title }: Props) {
         });
         console.debug("[ViewerPanel] model loaded. mesh names:", names);
         root.scale.set(3.0, 3.0, 3.0);
-        root.position.set(0, 0,0);
+        root.position.set(0, -2 ,0);
         group.add(root);
       },
       (ev) => console.debug("[ViewerPanel] loading...", ev?.loaded, "/", ev?.total),
@@ -331,6 +361,7 @@ export default function ViewerPanel({ title }: Props) {
         console.warn("[Ext] youtubeList__get error:", err);
       }
     };
+
 
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("pointerdown", onPointerDown);
