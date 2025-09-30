@@ -105,24 +105,12 @@ export default function ViewerPanel({ title }: Props) {
     scene.background = new THREE.Color(0xffffff);
     sceneRef.current = scene;
 
-
-
-
-    // 카메라/타겟 위치 튜닝
-const CAM_Y = 1.0;          // ← 카메라 높이(원래 1.6). 더 올리고 싶으면 값 키워줘.
-const FALLBACK_TARGET_Y = -1.0; // ← 모델이 y=-3에 있으니 중앙쯤을 바라보도록 약간 위로
-
-// Camera
-const width = host.clientWidth;
-const height = host.clientHeight;
-const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
-// y만 올리고, 바라보는 위치도 중앙을 향하게
-camera.position.set(0, CAM_Y, baseZRef.current);
-camera.lookAt(0, FALLBACK_TARGET_Y, 0);
-cameraRef.current = camera;
-
-
-
+    // Camera
+    const width = host.clientWidth;
+    const height = host.clientHeight;
+    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+    camera.position.set(0, 2.5, baseZRef.current); // ★ 카메라 y 살짝 올림
+    cameraRef.current = camera;
 
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -134,21 +122,33 @@ cameraRef.current = camera;
     rendererRef.current = renderer;
 
     // Lights
-    const dir = new THREE.DirectionalLight(0xd8d8d8, 2);
-
+    const dir = new THREE.DirectionalLight(0xffffff, 1.4);
+    dir.position.set(-2, 6, 6);     // ★ 방향/높이 명시
     dir.castShadow = true;
+    dir.shadow.mapSize.set(2048, 2048);
+    dir.shadow.camera.near = 0.5;
+    dir.shadow.camera.far = 50;
+    (dir.shadow.camera as THREE.OrthographicCamera).left = -20;
+    (dir.shadow.camera as THREE.OrthographicCamera).right = 20;
+    (dir.shadow.camera as THREE.OrthographicCamera).top = 20;
+    (dir.shadow.camera as THREE.OrthographicCamera).bottom = -20;
     scene.add(dir);
+    // dir.target을 중앙으로
+    const lightTarget = new THREE.Object3D();
+    lightTarget.position.set(0, 1, 0);
+    scene.add(lightTarget);
+    dir.target = lightTarget;
 
-    const amb = new THREE.AmbientLight(0xd8d8d8, 0.6);
+    const amb = new THREE.AmbientLight(0xffffff, 0.45);
     scene.add(amb);
 
     // Ground
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(200, 200),
-      new THREE.ShadowMaterial({ opacity: 0.35 })
+      new THREE.ShadowMaterial({ opacity: 0.3 })
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = 0;
+    ground.rotation.set(-Math.PI / 2, 0, 0);
+    ground.position.y = 0;          // ★ 바닥은 y=0으로 고정
     ground.receiveShadow = true;
     scene.add(ground);
 
@@ -166,23 +166,7 @@ cameraRef.current = camera;
       (gltf) => {
         const root = gltf.scene;
 
-        group.add(root);
-
-// ★ 모델의 진짜 중앙을 카메라 타겟으로 맞춤
-try {
-  const box = new THREE.Box3().setFromObject(root);
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  // 약간 위쪽을 보고 싶으면 보정값 추가
-  center.y += 0.0; // 필요하면 0.3 ~ 0.6 등으로 조절
-
-  controlsRef.current?.target.copy(center);
-  controlsRef.current?.update();
-  cameraRef.current?.lookAt(center);
-} catch (e) {
-  // 박스 계산 실패 시 폴백 타겟 유지
-}
-
+        // 재질/그림자 설정
         const names: string[] = [];
         root.traverse((child: any) => {
           if (child.isMesh) {
@@ -196,10 +180,34 @@ try {
             child.material.depthWrite = true;
           }
         });
-        console.debug("[ViewerPanel] model loaded. mesh names:", names);
+
         root.scale.set(3.0, 3.0, 3.0);
-        root.position.set(0, -2 ,0);
+
+        // ★★★★★ 정렬 핵심: 모델을 '원점'과 '바닥(y=0)'에 맞추기
+        // 1) 전체 바운딩 박스 계산
+        const box = new THREE.Box3().setFromObject(root);
+        const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
+        box.getSize(size);
+        box.getCenter(center);
+        console.debug("[Model] bbox size=", size, "center=", center, "minY=", box.min.y);
+
+        // 2) x/z 중심을 원점에, 3) 발바닥이 y=0에 오도록 이동
+        root.position.x -= center.x;
+        root.position.z -= center.z;
+        root.position.y -= box.min.y; // (minY를 0으로 올림)
+
+        // 그룹에 추가
         group.add(root);
+
+        // 4) 카메라 시선/컨트롤 타깃을 모델 중앙으로
+        //    (기준이 바닥 기준으로 재정렬됐으니 중앙은 height/2 지점)
+        const targetY = size.y * 0.5;
+        controlsRef.current?.target.set(0, targetY, 0);
+        controlsRef.current?.update();
+        cameraRef.current?.lookAt(0, targetY, 0);
+
+        console.debug("[ViewerPanel] model loaded. names:", names);
       },
       (ev) => console.debug("[ViewerPanel] loading...", ev?.loaded, "/", ev?.total),
       (err) => console.error("[ViewerPanel] GLB load error:", err)
@@ -219,7 +227,6 @@ try {
     canvas.style.height = "100%";
     canvas.style.display = "block";
     canvas.style.pointerEvents = "auto";
-    // 우클릭 드래그를 위해 컨텍스트 메뉴 비활성
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
     const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
@@ -241,16 +248,13 @@ try {
       mouseButtonRef.current = e.button as 0 | 1 | 2;
       console.debug("[PointerDown]", { button: e.button, x: e.clientX, y: e.clientY, canPan: canPanRef.current });
 
-      // 우클릭이면 회전 시작
-      if (e.button === 2) {
+      if (e.button === 2) { // right: rotate
         (e.target as Element).setPointerCapture?.(e.pointerId);
         isRotatingRef.current = true;
         rotOriginRef.current = { x: e.clientX, y: e.clientY };
         return;
       }
-
-      // 좌클릭 + 확대 상태면 팬 시작
-      if (e.button === 0 && canPanRef.current) {
+      if (e.button === 0 && canPanRef.current) { // left: pan when zoomed in
         (e.target as Element).setPointerCapture?.(e.pointerId);
         isPanningRef.current = true;
         dragOriginRef.current = { ...offsetRef.current };
@@ -264,12 +268,9 @@ try {
         const dy = e.clientY - rotOriginRef.current.y;
         rotOriginRef.current = { x: e.clientX, y: e.clientY };
 
-        // 회전 감도 조정
         modelGroupRef.current.rotation.y += dx * 0.01;
         modelGroupRef.current.rotation.x += dy * 0.01;
         modelGroupRef.current.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, modelGroupRef.current.rotation.x));
-        // 디버깅 로그(부담되면 주석)
-        // console.debug("[Rotate]", modelGroupRef.current.rotation);
       }
 
       if (isPanningRef.current) {
@@ -278,7 +279,6 @@ try {
         const next = { x: dragOriginRef.current.x + dx, y: dragOriginRef.current.y + dy };
         setOffset(next);
         offsetRef.current = next;
-        // console.debug("[Pan]", next);
       }
     };
 
@@ -297,10 +297,7 @@ try {
     const onClick = (e: MouseEvent) => {
       const start = dragStartRef.current;
       const moved = start && (Math.abs(e.clientX - start.x) > 4 || Math.abs(e.clientY - start.y) > 4);
-      if (isPanningRef.current || isRotatingRef.current || moved) {
-        // 드래그성 입력이면 클릭 취소
-        return;
-      }
+      if (isPanningRef.current || isRotatingRef.current || moved) return;
 
       const rect = canvas.getBoundingClientRect();
       const ndc = mouseNdcRef.current;
@@ -362,7 +359,6 @@ try {
       }
     };
 
-
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove);
@@ -390,12 +386,10 @@ try {
         modelGroupRef.current.position.y = -offsetRef.current.y * 0.01;
       }
       if (cameraRef.current) {
-        cameraRef.current.position.z = baseZRef.current / Math.max(zoom,1);
+        cameraRef.current.position.z = baseZRef.current / zoom; // ★ 줌 반영 정상화(0.8~2.4 모두 반영)
       }
       controls.update();
       renderer.render(scene, camera);
-      // 가벼운 상태 로그(필요시 주석)
-      // console.debug("[Tick]", { zoom, camZ: cameraRef.current?.position.z });
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
